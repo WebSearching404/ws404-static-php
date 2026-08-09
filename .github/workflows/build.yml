@@ -1,0 +1,289 @@
+name: Build static PHP
+
+# WHY THIS REPO EXISTS
+#
+# The NAS runner has no PHP and cannot get one the normal way: `setup-php` needs the Ondrej
+# PPA *and* root, and the runner is deliberately rootless (no_new_privileges=1). That blocks
+# ~49% of the fleet's CI spend from ever leaving GitHub-hosted minutes.
+#
+# A prebuilt static PHP exists upstream, but it is served from dl.static-php.dev, which
+# redirects twice and terminates at a DigitalOcean Spaces bucket. Neither host is on the
+# runner's egress allowlist, and - because the proxy is default-deny - a fetch there does not
+# fail, it HANGS until the job times out. Allowlisting a third-party blob host to pull an
+# unsigned binary onto hardware inside the LAN is the exact thing `PHPSTAN_TURBO: "0"` was set
+# to prevent elsewhere in this fleet.
+#
+# So we build it ourselves, here, on GitHub-hosted runners. The asymmetry is the whole trick:
+# the HOSTED runner has unrestricted egress and can fetch whatever the build needs, while the
+# NAS runner only ever sees the finished artifact as a GitHub release asset on github.com -
+# already allowlisted, no new hosts, no new credentials.
+#
+# The integrity story is the point, not a bonus. GitHub publishes each release asset's digest
+# through the API, independently of the bytes it serves. A consumer verifies the download
+# against a digest fetched from a different endpoint than the download itself - which is what
+# makes this a real anchor rather than trust-on-first-use. Hashing a file you just downloaded
+# from a single source pins "what I happened to receive", not "what the publisher published".
+
+on:
+  workflow_dispatch:
+    inputs:
+      php-versions:
+        description: 'JSON array of PHP versions to build, e.g. ["8.1","8.4"]'
+        required: false
+        default: '["8.1","8.4"]'
+      release-tag:
+        description: 'Tag to publish (e.g. v1). Leave EMPTY to build and verify WITHOUT publishing.'
+        required: false
+        default: ''
+      spc-ref:
+        description: 'static-php-cli release tag to build with. Empty = latest.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # SINGLE SOURCE OF TRUTH for the extension set. Derived from the fleet's COMMITTED
+  # composer.lock files, not guessed - see README for the full derivation.
+  #
+  # Two of these appear in NO lockfile and are still mandatory. They are the trap:
+  #   phar    - phpstan's `bin/phpstan` is a stub that does Phar::loadPhar(), and composer
+  #             itself ships as a .phar. Without it the install succeeds and the FIRST
+  #             invocation dies.
+  #   openssl - repo.packagist.org is HTTPS-only, so with no openssl the https:// stream
+  #             wrapper does not exist and metadata resolution fails.
+  # zip is included rather than relying on composer's unzip/7z fallback: the lanes run
+  # --prefer-dist, and whether `unzip` exists on the NAS runner is not something CI should
+  # depend on. A static PHP cannot dlopen anything, so anything omitted here is unavailable
+  # forever - the cost of over-including is a few MB, the cost of under-including is a
+  # re-release.
+  SPC_EXTENSIONS: bcmath,ctype,curl,dom,fileinfo,filter,iconv,mbstring,mbregex,openssl,pcntl,phar,posix,session,simplexml,sockets,sodium,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+
+  # Asserted one-by-one after the build. `spc build` can succeed while silently omitting an
+  # extension, and that failure is invisible until a plugin repo's CI breaks weeks later.
+  REQUIRED_MODULES: bcmath ctype curl dom fileinfo filter iconv json libxml mbstring openssl pcre Phar posix session SimpleXML sockets sodium tokenizer xml xmlreader xmlwriter zip zlib
+
+jobs:
+  build:
+    name: php ${{ matrix.php }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(github.event.inputs.php-versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every workflow_dispatch input and matrix value below is passed through `env:` rather
+      # than interpolated into the script body. Dispatch already requires write access, so
+      # this is not a live injection path - but this repo is public, `${{ }}` inside `run:`
+      # is textual substitution before the shell ever sees it, and the safe form costs
+      # nothing. See github.blog "how to catch GitHub Actions workflow injections".
+      - name: Resolve and fetch static-php-cli
+        id: spc
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPC_REF_INPUT: ${{ github.event.inputs.spc-ref }}
+        run: |
+          set -euo pipefail
+          ref="$SPC_REF_INPUT"
+          if [ -z "$ref" ]; then
+            ref="$(gh api repos/crazywhalecc/static-php-cli/releases/latest --jq .tag_name)"
+          fi
+          printf 'Using static-php-cli %s\n' "$ref"
+          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
+          curl -fsSL --retry 3 -o /tmp/spc.tar.gz \
+            "https://github.com/crazywhalecc/static-php-cli/releases/download/${ref}/spc-linux-x86_64.tar.gz"
+          tar -xzf /tmp/spc.tar.gz -C /tmp
+          chmod +x /tmp/spc
+          /tmp/spc --version
+
+      - name: Install build prerequisites
+        run: /tmp/spc doctor --auto-fix
+
+      - name: Download sources
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          set -euo pipefail
+          /tmp/spc download --with-php="$PHP_VERSION" \
+            --for-extensions="$SPC_EXTENSIONS" \
+            --prefer-pre-built
+
+      - name: Build CLI
+        run: /tmp/spc build "$SPC_EXTENSIONS" --build-cli
+
+      # ---------------------------------------------------------------------
+      # VERIFICATION. A build that cannot run the real toolchain does not ship.
+      # Each check below can actually FAIL - none of them is a formality.
+      # ---------------------------------------------------------------------
+      - name: Assert the binary is genuinely static
+        run: |
+          set -euo pipefail
+          BIN=buildroot/bin/php
+          test -x "$BIN"
+          file "$BIN"
+          # The decisive test is not `file` output - a static-PIE reports as "dynamically
+          # linked" - it is the absence of an INTERP program header. No interpreter means no
+          # dynamic loader is consulted, which is what lets it run on a rootless container
+          # with no matching shared libraries.
+          if readelf -l "$BIN" | grep -q INTERP; then
+            echo "::error::binary has a PT_INTERP segment - it is NOT self-contained"
+            readelf -l "$BIN" | grep -A2 INTERP
+            exit 1
+          fi
+          echo "no PT_INTERP - self-contained"
+          if ldd "$BIN" 2>&1 | grep -qv 'not a dynamic executable'; then
+            echo "ldd reports (informational):"; ldd "$BIN" 2>&1 || true
+          fi
+
+      - name: Assert version and every required module
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          set -euo pipefail
+          BIN="$PWD/buildroot/bin/php"
+          "$BIN" -v
+          actual="$("$BIN" -v | head -1 | sed -E 's/^PHP ([0-9]+\.[0-9]+).*/\1/')"
+          if [ "$actual" != "$PHP_VERSION" ]; then
+            printf '::error::built PHP %s but asked for %s\n' "$actual" "$PHP_VERSION"; exit 1
+          fi
+          "$BIN" -m
+          missing=''
+          for m in $REQUIRED_MODULES; do
+            "$BIN" -m | grep -qix "$m" || missing="$missing $m"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::static build is MISSING required modules:$missing"
+            echo "A static PHP cannot dlopen - these can never be added at runtime."
+            exit 1
+          fi
+          echo "all required modules present"
+
+      - name: Prove composer runs (exercises phar + openssl + zip)
+        run: |
+          set -euo pipefail
+          BIN="$PWD/buildroot/bin/php"
+          # From github.com releases, NOT getcomposer.org - the NAS runner cannot reach
+          # getcomposer.org, and using the same source here keeps this build honest about
+          # what the consuming lanes can actually do.
+          ver="$(gh api repos/composer/composer/releases/latest --jq .tag_name)"
+          curl -fsSL --retry 3 -o /tmp/composer.phar \
+            "https://github.com/composer/composer/releases/download/${ver}/composer.phar"
+          "$BIN" /tmp/composer.phar --version
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Prove PHPStan actually analyses (the real fleet workload)
+        run: |
+          set -euo pipefail
+          BIN="$PWD/buildroot/bin/php"
+          work=/tmp/phpstan-proof
+          mkdir -p "$work/src" && cd "$work"
+          cat > composer.json <<'JSON'
+          { "require-dev": { "phpstan/phpstan": "^2.0" },
+            "config": { "platform-check": false } }
+          JSON
+          # A file with a REAL error, so a pass proves analysis ran rather than no-opped.
+          cat > src/Sample.php <<'PHP'
+          <?php
+          declare(strict_types=1);
+          function ws404_sample(int $n): string { return $n; }
+          PHP
+          "$BIN" /tmp/composer.phar install --no-interaction --no-progress --prefer-dist
+          set +e
+          "$BIN" vendor/bin/phpstan analyse --level=5 --no-progress src/ > out.txt 2>&1
+          rc=$?
+          set -e
+          cat out.txt
+          # NEGATIVE ASSERTION: PHPStan must REPORT the type error. If it exits 0 here the
+          # analysis silently did nothing, which would look identical to success.
+          if [ $rc -eq 0 ]; then
+            echo "::error::PHPStan exited 0 on code with a known type error - it did not analyse"
+            exit 1
+          fi
+          grep -q 'should return string but returns int' out.txt || {
+            echo "::error::PHPStan ran but did not produce the expected diagnostic"; exit 1; }
+          echo "PHPStan analysed correctly and caught the seeded error"
+
+      - name: Package
+        id: pkg
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          set -euo pipefail
+          name="php-${PHP_VERSION}-cli-linux-x86_64.tar.gz"
+          install -m 0755 buildroot/bin/php php
+          tar -czf "$name" php
+          sha="$(sha256sum "$name" | cut -d' ' -f1)"
+          full="$(./php -v | head -1)"
+          {
+            echo "name=$name"
+            echo "sha256=$sha"
+            echo "full_version=$full"
+          } >> "$GITHUB_OUTPUT"
+          echo "$name  $sha"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ matrix.php }}
+          path: ${{ steps.pkg.outputs.name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    # Only when a tag was explicitly supplied. A plain dispatch builds and verifies and
+    # publishes NOTHING, so the expensive path can be exercised without minting a release.
+    if: ${{ github.event.inputs.release-tag != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release-tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd dist && ls -l
+          {
+            echo "Static PHP CLI for linux-x86_64, built by this repo's own CI."
+            echo
+            echo "Self-contained (no PT_INTERP), runs unprivileged. Verified in-build:"
+            echo "composer runs, and PHPStan analyses a file with a seeded type error and"
+            echo "is required to report it."
+            echo
+            echo '| asset | sha256 |'
+            echo '|---|---|'
+            # shellcheck disable=SC2016  # the backticks are literal markdown, not substitution
+            for f in *.tar.gz; do
+              printf '| `%s` | `%s` |\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"
+            done
+            echo
+            echo "Prefer the digest GitHub publishes over this table - it is served by a"
+            echo "different endpoint than the bytes, which is what makes it an anchor:"
+            echo
+            printf '    gh api repos/%s/releases/tags/%s --jq ".assets[]|{name,digest}"\n' \
+              "$REPO" "$RELEASE_TAG"
+          } > NOTES.md
+          cat NOTES.md
+          gh release create "$RELEASE_TAG" \
+            --repo "$REPO" \
+            --title "Static PHP $RELEASE_TAG" \
+            --notes-file NOTES.md \
+            ./*.tar.gz

@@ -1,0 +1,4 @@
+buildroot/
+dist/
+*.tar.gz
+php
