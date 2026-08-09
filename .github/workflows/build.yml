@@ -68,6 +68,11 @@ env:
   # extension, and that failure is invisible until a plugin repo's CI breaks weeks later.
   REQUIRED_MODULES: bcmath ctype curl dom fileinfo filter iconv json libxml mbstring openssl pcre Phar posix session SimpleXML sockets sodium tokenizer xml xmlreader xmlwriter zip zlib
 
+  # Zig instead of musl-cross-make - see the comment on the doctor step for why. The values
+  # are PHP ::class strings, so the backslashes are literal and must survive YAML unquoted.
+  SPC_TOOLCHAIN: 'SPC\toolchain\ZigToolchain'
+  SPC_TARGET: x86_64-linux-musl
+
 jobs:
   build:
     name: php ${{ matrix.php }}
@@ -104,8 +109,30 @@ jobs:
           chmod +x /tmp/spc
           /tmp/spc --version
 
+      # WHY NOT THE DEFAULT musl TOOLCHAIN: `spc doctor --auto-fix` tries to build the musl
+      # wrapper from source, fetched from https://musl.libc.org/releases/. That host is
+      # reachable from ordinary networks (verified: HTTP 200 in ~1.2s) but TIMES OUT from
+      # GitHub-hosted runners - a first attempt burned 134s and failed with
+      # "Couldn't connect to server". It is not an outage, so retrying does not fix it.
+      #
+      # Zig is the documented alternative and it ships its own musl libc, so
+      # LinuxMuslCheck::checkMuslCrossMake() short-circuits to OK on a non-musl distro
+      # (src/SPC/doctor/item/LinuxMuslCheck.php). checkMusl() still stats
+      # /lib/ld-musl-<arch>.so.1, which Ubuntu's own `musl` package provides - from the
+      # Ubuntu archive, which GitHub runners can always reach.
+      - name: Provide the musl loader from the Ubuntu archive
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl musl-tools
+          ls -l "/lib/ld-musl-$(uname -m).so.1"
+
       - name: Install build prerequisites
-        run: /tmp/spc doctor --auto-fix
+        run: |
+          set -euo pipefail
+          # Print the full report even on success - a doctor that silently "fixed" something
+          # unexpected is worth seeing in the log.
+          /tmp/spc doctor --auto-fix
 
       - name: Download sources
         env:
