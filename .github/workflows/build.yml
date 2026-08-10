@@ -302,6 +302,20 @@ jobs:
               printf '| `%s` | `%s` |\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"
             done
             echo
+            # MACHINE-READABLE, and the reason it exists: without the exact patch level
+            # recorded here, a staleness check has nothing to compare against and can only
+            # report UNKNOWN. The asset NAME carries the minor (8.1) but not the patch
+            # (8.1.34). Derived by running the artifact itself rather than trusting a
+            # build-time variable, so it describes what actually shipped.
+            echo '```'
+            for f in *.tar.gz; do
+              minor="$(echo "$f" | sed -E 's/^php-([0-9]+\.[0-9]+)-.*/\1/')"
+              rm -rf _v && mkdir _v && tar -xzf "$f" -C _v
+              printf 'PHP-BUILT %s %s\n' "$minor" "$(_v/php -r 'echo PHP_VERSION;')"
+              rm -rf _v
+            done
+            echo '```'
+            echo
             echo "Prefer the digest GitHub publishes over this table - it is served by a"
             echo "different endpoint than the bytes, which is what makes it an anchor:"
             echo
