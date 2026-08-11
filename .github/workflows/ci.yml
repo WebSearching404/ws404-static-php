@@ -1,0 +1,37 @@
+name: CI
+
+# This repo is one workflow plus a README - there is no application code to test. So CI is
+# deliberately small, and lints the only thing that can realistically break.
+#
+# WHY NOT BUILD ON EVERY PR. A full build is ~17 minutes per PHP version and produces a binary
+# that would be thrown away immediately. build.yml already verifies itself far more strictly
+# than any smoke test would: it asserts the binary is genuinely static (no PT_INTERP), asserts
+# every required module is compiled in, proves composer runs, and REQUIRES PHPStan to report a
+# seeded type error before it will pass. It is also dispatch-only, so a break surfaces on the
+# next deliberate build, with a human watching. Paying 17 minutes on every README typo to
+# shorten that feedback loop is a bad trade.
+#
+# What actually breaks a repo shaped like this is a YAML or shell mistake in build.yml, and
+# actionlint catches that in seconds - including shellcheck over every `run:` block, which is
+# the part that matters here, since build.yml is mostly shell.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    # Same name and invocation as ws404-plugin-workflow's Meta CI, so the fleet has ONE lint
+    # convention rather than a per-repo dialect.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # `go run` rather than an action: the version is pinned and the Go module checksum
+      # database verifies it, so nothing unpinned is trusted. actionlint additionally runs
+      # shellcheck over each `run:` block when shellcheck is on PATH - it is, on ubuntu-latest.
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
