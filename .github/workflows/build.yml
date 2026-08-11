@@ -143,8 +143,27 @@ jobs:
             --for-extensions="$SPC_EXTENSIONS" \
             --prefer-pre-built
 
+      # `--debug` because spc's default output prints only the FAILED COMMAND, not the
+      # compiler error that caused it. A `make ... cli` that exits 2 is unactionable
+      # without the actual error text, and the run is expensive enough (~17 min per
+      # version) that paying for a second run just to see the message is the wrong trade.
+      # The cost of always-on debug is log volume, which is free.
       - name: Build CLI
-        run: /tmp/spc build "$SPC_EXTENSIONS" --build-cli
+        run: /tmp/spc build "$SPC_EXTENSIONS" --build-cli --debug
+
+      # spc writes its full console and shell transcripts to log/ and, on failure, tells
+      # you to go read them - but they live on the runner and die with it, so the message
+      # is a dead end. Attempting an unbuilt PHP version currently produces "Failed module:
+      # Builder for Linux" and nothing more (hit for real on PHP 8.3, 2026-08-11).
+      # if: failure() keeps this free on the happy path.
+      - name: Upload spc logs (diagnosis)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: spc-logs-php-${{ matrix.php }}
+          path: log/
+          if-no-files-found: warn
+          retention-days: 14
 
       # ---------------------------------------------------------------------
       # VERIFICATION. A build that cannot run the real toolchain does not ship.
