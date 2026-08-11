@@ -184,6 +184,16 @@ Three things that check gets right on purpose, all learned the hard way:
   `php/php-src` tags API also returns tags in non-version order, which makes this easy to walk
   into.
 
+**The tag is a label; the sha256 is the control.** So the check verifies both, comparing each
+pinned digest against the digest the release actually publishes for that asset — §2's principle
+applied to the pins themselves, and one API call with no download. The case that motivates it
+needs no mistake by anyone: an asset deleted and re-uploaded under an **unchanged tag** leaves
+the tag correct, so a tag-only check reported CURRENT while every consumer lane began aborting
+on a digest mismatch with nothing explaining why. That is now reported as **MISMATCH**, named
+separately from BEHIND precisely because bumping the tag would not fix it. A pin whose digests
+cannot be read, a release that lists no assets, and an asset with no published digest are all
+UNKNOWN — the same rule as everywhere else here.
+
 None of that is left to inspection. `tests/test-static-php-drift.sh` runs the real script byte
 for byte with only `gh` and `curl` shimmed, and Meta CI gates it. Every negative case asserts
 the *absence* of the all-clear line rather than merely the presence of UNKNOWN, and the tests
