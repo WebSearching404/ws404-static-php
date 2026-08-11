@@ -142,3 +142,47 @@ Fetch by pinned digest, verify, cache by digest, fail closed on mismatch. Stage 
 the runner's `_work` directory so a `clean: true` checkout cannot clobber it.
 
 Workflow steps then just put it on `PATH`; nothing needs root and nothing new is allowlisted.
+
+## 7. Staying current, and how you'd know if it wasn't
+
+A pin nobody can see is behind is **worse** than no pin: it looks deliberate while quietly
+freezing, and PHP ships security releases. So the pin is paired with a detector.
+
+`ws404-plugin-workflow`'s **`static-php-drift.yml`** runs monthly and checks two independent
+things — whether the consumer's pin is behind the newest release here, and whether that
+release's PHP patch level still matches upstream per branch (`php.net/releases/?json&version=`).
+It **reports and never fails**: being behind is a reason to schedule a rebuild, not to break
+every PHPStan lane in the fleet. The signal is a GitHub issue it opens, updates and closes on
+its own.
+
+Two things that check gets right on purpose, both learned the hard way:
+
+- **Three-way, never two.** Every result is BEHIND / CURRENT / **UNKNOWN**, and UNKNOWN is
+  never folded into "fine". An unreachable php.net, a release with no `PHP-BUILT` block, or an
+  unreadable pin all mean *we do not know* — and printing "current" there would be a false
+  all-clear on the exact mechanism being policed.
+- **`sort -V`, never plain `sort`.** Lexically `8.4.9` sorts *above* `8.4.24`. The
+  `php/php-src` tags API also returns tags in non-version order, which makes this easy to walk
+  into.
+
+That comparison needs the exact patch level, which the asset name does not carry
+(`php-8.1-...` is the minor). So the release notes include a machine-readable block, derived by
+**running** the packaged artifact rather than echoing a build-time variable — it describes what
+actually shipped:
+
+```
+PHP-BUILT 8.1 8.1.34
+PHP-BUILT 8.4 8.4.24
+```
+
+## 8. CI in this repo
+
+Deliberately small: `actionlint` (which also runs shellcheck over every `run:` block) on each
+push and PR, and it is the one required check on `main`.
+
+There is **no build-on-every-PR**, on purpose. A full build is ~17 minutes per PHP version and
+throws the binary away, while `build.yml` already verifies itself far more strictly than a smoke
+test would — see §4. It is dispatch-only, so a break surfaces on the next deliberate build with
+a human watching. Paying 17 minutes on every README typo to shorten that loop is a bad trade;
+what actually breaks a repo shaped like this is a shell mistake, and actionlint catches that in
+seconds.
