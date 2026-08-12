@@ -1,6 +1,6 @@
 name: CI
 
-# This repo is one workflow plus a README - there is no application code to test. So CI is
+# This repo is two workflows plus a README - there is no application code to test. So CI is
 # deliberately small, and lints the only thing that can realistically break.
 #
 # WHY NOT BUILD ON EVERY PR. A full build is ~17 minutes per PHP version and produces a binary
@@ -25,13 +25,98 @@ permissions:
 
 jobs:
   actionlint:
-    # Same name and invocation as ws404-plugin-workflow's Meta CI, so the fleet has ONE lint
-    # convention rather than a per-repo dialect.
+    # Same job name and tool pins as ws404-plugin-workflow's Meta CI, so the fleet has ONE
+    # lint convention rather than a per-repo dialect.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # `go run` rather than an action: the version is pinned and the Go module checksum
-      # database verifies it, so nothing unpinned is trusted. actionlint additionally runs
-      # shellcheck over each `run:` block when shellcheck is on PATH - it is, on ubuntu-latest.
-      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+      # WAS `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`, which had two problems
+      # even though it passed every time.
+      #
+      # 1. It silently depended on whatever the ubuntu-latest image happened to ship. The old
+      #    comment here asserted "shellcheck is on PATH, on ubuntu-latest" - true, but nothing
+      #    checked it and nothing would have said so if it stopped being true.
+      # 2. It could never move to the farm. The runner image ships no `go`, it is rootless with
+      #    no_new_privileges=1 so nothing installs at job time, and proxy.golang.org is not on
+      #    the egress allowlist - where a refused CONNECT HANGS rather than failing, so a
+      #    retarget would have burned the full timeout on every PR instead of erroring.
+      #
+      # Both tools publish official static linux-amd64 binaries as GitHub release assets, and
+      # github.com is already allowlisted, so this needs no new host. Digests are PINNED and
+      # were read from the releases API - a different endpoint than the one serving the bytes,
+      # which is what makes this an anchor rather than trust-on-first-use. Fails CLOSED.
+      #
+      # SHELLCHECK IS THE LOAD-BEARING PART. actionlint shellchecks `run:` blocks ONLY when
+      # shellcheck is on PATH, and silently skips that entire class of check when it is not -
+      # exiting 0 either way. build.yml is ~200 lines of shell, so losing that would leave a
+      # green check that had stopped checking the only thing worth checking here.
+      - name: Install pinned actionlint + shellcheck
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          SHELLCHECK_VERSION: 'v0.11.0'
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+        run: |
+          set -euo pipefail
+
+          TOOLROOT="${RUNNER_TOOL_CACHE:-$HOME/.cache}"
+          BIN="$TOOLROOT/ws404-lint-bin"
+          mkdir -p "$BIN"
+
+          fetch_verified() { # url, expected_sha256, dest_tarball
+            local url="$1" want="$2" dest="$3" tmp got
+            tmp="$(mktemp)"
+            curl -fsSL --retry 3 --retry-delay 2 --max-time 300 "$url" -o "$tmp"
+            got="$(sha256sum "$tmp" | cut -d' ' -f1)"
+            if [ "$got" != "$want" ]; then
+              rm -f "$tmp"
+              echo "::error::digest MISMATCH for $url"
+              echo "  got    $got"
+              echo "  pinned $want"
+              echo "Refusing to execute an unverified binary."
+              exit 1
+            fi
+            mv "$tmp" "$dest"
+          }
+
+          # Cache keyed BY DIGEST, so bumping a pin self-invalidates and no stale binary can
+          # outlive its pin.
+          if [ ! -x "$BIN/actionlint-$ACTIONLINT_SHA256" ]; then
+            fetch_verified \
+              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+              "$ACTIONLINT_SHA256" "$BIN/actionlint.tgz"
+            tar -xzf "$BIN/actionlint.tgz" -C "$BIN" actionlint
+            rm -f "$BIN/actionlint.tgz"
+            mv "$BIN/actionlint" "$BIN/actionlint-$ACTIONLINT_SHA256"
+          fi
+          cp "$BIN/actionlint-$ACTIONLINT_SHA256" "$BIN/actionlint"
+
+          if [ ! -x "$BIN/shellcheck-$SHELLCHECK_SHA256" ]; then
+            fetch_verified \
+              "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.gz" \
+              "$SHELLCHECK_SHA256" "$BIN/shellcheck.tgz"
+            tar -xzf "$BIN/shellcheck.tgz" -C "$BIN" --strip-components=1 \
+              "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+            rm -f "$BIN/shellcheck.tgz"
+            mv "$BIN/shellcheck" "$BIN/shellcheck-$SHELLCHECK_SHA256"
+          fi
+          cp "$BIN/shellcheck-$SHELLCHECK_SHA256" "$BIN/shellcheck"
+
+          chmod +x "$BIN/actionlint" "$BIN/shellcheck"
+          echo "$BIN" >> "$GITHUB_PATH"
+
+      - name: Assert the linter is whole, then lint
+        run: |
+          set -euo pipefail
+          # Fail LOUDLY if shellcheck is missing: without it actionlint still exits 0 while
+          # skipping every `run:` block. A green check that stopped checking is worse than a
+          # red one.
+          command -v shellcheck >/dev/null || {
+            echo "::error::shellcheck is not on PATH — actionlint would silently skip all shell linting."
+            exit 1
+          }
+          actionlint --version
+          shellcheck --version | awk '/version:/{print "shellcheck " $2}'
+          actionlint -color
