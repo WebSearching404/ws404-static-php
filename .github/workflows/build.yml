@@ -96,10 +96,17 @@ env:
   # this env var REPLACES spc's default rather than extending it, so the prefix must be kept
   # in sync if spc ever changes it.
   #
+  # BOTH flags are required, and -mno-avx512f alone is NOT enough. The two probes build with
+  # different flag sets: the VBMI one appends -mavx512vbmi on top, so it re-enables what
+  # -mno-avx512f turned off. Measured, not reasoned: with only -mno-avx512f the log showed
+  # "avx512 supports in compiler... no" but "avx512 vbmi supports in compiler... YES", and the
+  # build still died -- because base64.c's failing function is php_base64_encode_avx512_VBMI.
+  # Disabling the base ISA without the extension is a half-fix that looks like a whole one.
+  #
   # Applied to every version, not just 8.3: uniform binaries are easier to reason about, the
   # only loss is an SIMD fast path in base64 on CI runs, and the farm's CPU capabilities are
   # not something a published artifact should depend on.
-  SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS: '-g -fstack-protector-strong -fno-ident -fPIE -fPIC -Os -Wno-date-time -mno-avx512f'
+  SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS: '-g -fstack-protector-strong -fno-ident -fPIE -fPIC -Os -Wno-date-time -mno-avx512f -mno-avx512vbmi'
 
 jobs:
   build:
