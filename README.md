@@ -156,9 +156,12 @@ once per distinct tag. It **reports and never fails**: being behind is a reason 
 rebuild, not to break every PHPStan and PHPUnit lane in the fleet. The signal is a GitHub issue
 it opens, updates and closes on its own.
 
-**The pin has more than one home, so the check covers a set of locations.** Today those are
-`ws404-plugin-workflow`'s `phpstan.yml` and `ws404-shared-mcp`'s `phpunit.yml`, and each is
-reported *separately*. The duplication is deliberate and not removable: shared-mcp's
+**The pin has more than one home, so the check covers a set of locations**, and each is reported
+*separately*. The inventory lives in one place — the `LOCATIONS` table in
+`bin/check-static-php-drift.sh` — and is deliberately **not** repeated here: it went from 2
+entries to 13 in a single day as the farm migration added self-contained lanes, and a count
+written into prose is stale the moment someone adds a row. Read the table, not this paragraph.
+The duplication itself is deliberate and not removable: shared-mcp's
 `phpunit.yml` is self-contained by design (audit F-07) and the reusable `phpstan.yml` is
 PHPStan-shaped, so there is no setup step to share. The predecessor grepped only its own
 `phpstan.yml`, which made the shared-mcp copy invisible — a BEHIND issue would have been closed
