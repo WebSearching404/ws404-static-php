@@ -73,6 +73,41 @@ env:
   SPC_TOOLCHAIN: 'SPC\toolchain\ZigToolchain'
   SPC_TARGET: x86_64-linux-musl
 
+  # DISABLE AVX-512 DETECTION. Without this, PHP 8.3 does not build at all: clang (via Zig)
+  # refuses ext/standard/base64.c's AVX-512 VBMI path with "always_inline function
+  # '_mm512_permutexvar_epi8' requires target feature 'evex512'" plus ABI-change errors.
+  # 8.1 predates that code path and 8.4 carries upstream's evex512 fix, which was never
+  # backported to 8.3 - so 8.3 is the only version that trips it, and it trips HARD (make
+  # exits 2).
+  #
+  # WHY NOT THE CACHE VARS. `./configure php_cv_have_avx512=no php_cv_have_avx512vbmi=no` is
+  # already passed below and is a NO-OP on every branch - it looks like the mitigation and
+  # does nothing. PHP_CHECK_AVX512_SUPPORTS in build/php.m4 uses AC_MSG_CHECKING +
+  # AC_RUN_IFELSE and sets a plain shell var (have_avx512_supports); it is NOT an
+  # AC_CACHE_CHECK, so there is no cache variable to override. The 8.3 log proves it:
+  # "checking for avx512 supports in compiler... yes" with NO "(cached)" prefix, i.e. the
+  # probe ran fresh and ignored us. Do not "fix" future breakage by editing those cache vars.
+  #
+  # This is the lever that actually works: spc feeds this to BOTH ./configure and make (its
+  # own env.ini says so), and the probe builds with "-mavx512f ... $CFLAGS", so a TRAILING
+  # -mno-avx512f wins and the probe correctly reports unsupported. The value mirrors spc's
+  # linux default (-g -fstack-protector-strong -fno-ident -fPIE + SPC_DEFAULT_C_FLAGS,
+  # observed verbatim in the configure line of a real run) with our flag appended; setting
+  # this env var REPLACES spc's default rather than extending it, so the prefix must be kept
+  # in sync if spc ever changes it.
+  #
+  # BOTH flags are required, and -mno-avx512f alone is NOT enough. The two probes build with
+  # different flag sets: the VBMI one appends -mavx512vbmi on top, so it re-enables what
+  # -mno-avx512f turned off. Measured, not reasoned: with only -mno-avx512f the log showed
+  # "avx512 supports in compiler... no" but "avx512 vbmi supports in compiler... YES", and the
+  # build still died -- because base64.c's failing function is php_base64_encode_avx512_VBMI.
+  # Disabling the base ISA without the extension is a half-fix that looks like a whole one.
+  #
+  # Applied to every version, not just 8.3: uniform binaries are easier to reason about, the
+  # only loss is an SIMD fast path in base64 on CI runs, and the farm's CPU capabilities are
+  # not something a published artifact should depend on.
+  SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS: '-g -fstack-protector-strong -fno-ident -fPIE -fPIC -Os -Wno-date-time -mno-avx512f -mno-avx512vbmi'
+
 jobs:
   build:
     name: php ${{ matrix.php }}
