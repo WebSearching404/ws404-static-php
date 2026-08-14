@@ -1,0 +1,222 @@
+name: Build static tools
+
+# Builds statically linked `zip` and `rsync` for linux-x86_64 and publishes them as
+# release assets, so the rootless NAS runner can have them WITHOUT a derived container
+# image, a container registry, or any credential.
+#
+# WHY THIS EXISTS, and why it is not the container image it started as.
+#
+# The runner is rootless (uid 1001, cap_drop ALL, no_new_privileges=1), so a job can never
+# install a package. Stock ghcr.io/actions/actions-runner ships no `zip` and no `rsync`,
+# which blocks every `Extracted-artifact smoke` job in the fleet plus ws404-plugin-workflow's
+# own zip-reproducibility and hermetic-tests -- their scripts hard-require both in a
+# precondition.
+#
+# The obvious fix is a derived runner image. That was built, and then abandoned, because
+# consuming it needs a private-registry credential ON the NAS (GHCR packages default to
+# private, GHCR accepts only classic tokens, and the narrowest such token is account-wide
+# package read). The alternative -- publishing the image -- would advertise the farm's exact
+# toolchain to save CI minutes.
+#
+# None of that is necessary. `/runner` is a HOST bind-mount, and the runner honours a
+# `.path` file in its install directory, so binaries dropped on the volume are on PATH for
+# every job. Static binaries fetched from a PUBLIC release need no credential and expose
+# nothing: zip and rsync are GPL tools available everywhere, unlike a runner image.
+#
+# Same asymmetry the PHP build already relies on: the BUILD runs here with unrestricted
+# egress and can fetch sources from anywhere, while the NAS only ever sees a finished,
+# digest-pinned asset on github.com -- already allowlisted, no new hosts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: 'Tag to publish (e.g. tools-v1). Leave EMPTY to build and verify WITHOUT publishing.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  # Sources are pinned BY DIGEST, and each digest was read from a place other than the bytes:
+  #   rsync - the GitHub releases API (asset digest), a different endpoint than the download.
+  #   zip   - Ubuntu's .dsc, a separate file from the tarball. Cross-checked across two
+  #           independent .dsc revisions (3.0-8 and 3.0-15ubuntu3), which agree -- so it is
+  #           the upstream tarball's digest rather than an artifact of one packaging run.
+  # Info-ZIP publishes no GitHub releases and its own hosting is unreliable; the Ubuntu
+  # archive is a stable, versioned mirror of the identical upstream tarball.
+  RSYNC_VERSION: '3.5.0'
+  RSYNC_SHA256: c7ffd1ef653e99540f661e47cb00b7f9cad1ee6b972399b16f93d672656e0d33
+  ZIP_SHA256: f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369
+
+jobs:
+  build:
+    name: static-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # musl rather than glibc -static. A glibc static binary still dlopens NSS at runtime
+      # for user/group lookups, which rsync does when mapping ownership -- so "static" glibc
+      # can still fail on a host whose libc differs. musl has no such split.
+      - name: Install musl toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools musl-dev
+          musl-gcc --version | head -1
+
+      - name: Fetch and verify sources
+        run: |
+          set -euo pipefail
+          mkdir -p src && cd src
+
+          fetch_verified() { # url, expected_sha256, dest
+            local url="$1" want="$2" dest="$3" got
+            curl -fsSL --retry 3 --retry-delay 2 --max-time 300 "$url" -o "$dest"
+            got="$(sha256sum "$dest" | cut -d' ' -f1)"
+            if [ "$got" != "$want" ]; then
+              echo "::error::digest MISMATCH for $url"
+              echo "  got    $got"
+              echo "  pinned $want"
+              rm -f "$dest"
+              exit 1
+            fi
+            echo "verified $(basename "$dest")"
+          }
+
+          fetch_verified \
+            "https://github.com/RsyncProject/rsync/releases/download/v${RSYNC_VERSION}/rsync-${RSYNC_VERSION}.tar.gz" \
+            "$RSYNC_SHA256" rsync.tar.gz
+          fetch_verified \
+            "http://archive.ubuntu.com/ubuntu/pool/main/z/zip/zip_3.0.orig.tar.gz" \
+            "$ZIP_SHA256" zip.tar.gz
+
+          tar -xzf rsync.tar.gz
+          tar -xzf zip.tar.gz
+
+      # Info-ZIP has no ./configure; it ships target makefiles. The generic unix target
+      # takes CC/CFLAGS, so musl-gcc plus -static is the whole story.
+      - name: Build zip
+        run: |
+          set -euo pipefail
+          cd src/zip30
+          make -f unix/Makefile generic \
+            CC="musl-gcc" \
+            CFLAGS="-O2 -static -DUNIX -DLARGE_FILE_SUPPORT" \
+            LFLAGS1="-static"
+          ./zip -v | head -2
+          cp zip ../../zip
+
+      - name: Build rsync
+        run: |
+          set -euo pipefail
+          cd "src/rsync-${RSYNC_VERSION}"
+          # Disabled everything the fleet does not use. xxhash/zstd/lz4/openssl would each
+          # drag in a shared dependency and defeat the static link; the lanes only ever run
+          # local `rsync -a --exclude-from=...`, never a daemon or a network transfer.
+          ./configure \
+            CC="musl-gcc" \
+            CFLAGS="-O2" \
+            LDFLAGS="-static" \
+            --disable-xxhash --disable-zstd --disable-lz4 --disable-openssl \
+            --disable-md2man --without-included-zlib >/dev/null
+          make -j"$(nproc)" >/dev/null
+          ./rsync --version | head -2
+          cp rsync ../../rsync
+
+      # Each assertion below can actually FAIL. A binary that is not genuinely static is
+      # useless on the runner and the failure would surface weeks later as a confusing red
+      # check in a plugin repo, not here.
+      - name: Assert both binaries are genuinely static and functional
+        run: |
+          set -euo pipefail
+          for b in zip rsync; do
+            echo "== $b =="
+            file "$b"
+            # The decisive test is the absence of an INTERP program header: no interpreter
+            # means no dynamic loader is consulted, which is what lets it run in a container
+            # whose libc it was not built against.
+            if readelf -l "$b" | grep -q INTERP; then
+              echo "::error::$b has a PT_INTERP segment - it is NOT self-contained"
+              exit 1
+            fi
+            echo "  no PT_INTERP - self-contained"
+            ldd "$b" 2>&1 | grep -qi 'not a dynamic executable' || {
+              echo "::error::$b reports dynamic dependencies"; ldd "$b"; exit 1; }
+            echo "  ldd confirms no dynamic dependencies"
+          done
+
+          # Functional proof, not just a version string: round-trip a real tree through
+          # rsync's exclude handling and zip, then verify the result.
+          mkdir -p t/src/keep t/src/skip && echo hello > t/src/keep/a.txt && echo no > t/src/skip/b.txt
+          printf 'skip\n' > t/exclude.txt
+          ./rsync -a --exclude-from=t/exclude.txt t/src/ t/out/
+          test -f t/out/keep/a.txt || { echo "::error::rsync did not copy the kept file"; exit 1; }
+          test ! -e t/out/skip   || { echo "::error::rsync did NOT honour --exclude-from"; exit 1; }
+          echo "rsync: copies and honours --exclude-from"
+          (cd t/out && ../../zip -X -q -r ../a.zip .)
+          unzip -l t/a.zip | grep -q 'keep/a.txt' || { echo "::error::zip archive missing expected entry"; exit 1; }
+          echo "zip: produced a readable archive with the expected entry"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          tar -czf zip-linux-x86_64.tar.gz zip
+          tar -czf rsync-linux-x86_64.tar.gz rsync
+          sha256sum zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: static-tools
+          path: |
+            zip-linux-x86_64.tar.gz
+            rsync-linux-x86_64.tar.gz
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    # Only when a tag was explicitly supplied, mirroring build.yml: a plain dispatch builds
+    # and verifies and publishes NOTHING, so the expensive path can be exercised safely.
+    if: ${{ github.event.inputs.release-tag != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: static-tools
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Statically linked \`zip\` and \`rsync\` for linux-x86_64, for the rootless NAS runner."
+            echo
+            echo "Consumed by \`start.sh\` on nas-linux-1, fetched digest-pinned from github.com."
+            echo "Verify against the digests the API reports for these assets, never against a"
+            echo "hash of what you downloaded."
+            echo
+            echo '```'
+            sha256sum zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
+            echo '```'
+          } > notes.md
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Static tools $RELEASE_TAG" \
+            --notes-file notes.md \
+            zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
+          echo "Pin these in start.sh (digests as PUBLISHED, read back from the API):"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[] | "  \(.name)  \(.digest)"'
