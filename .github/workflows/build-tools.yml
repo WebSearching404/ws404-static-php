@@ -230,10 +230,18 @@ jobs:
             sha256sum zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
             echo '```'
           } > notes.md
+          # --latest=false is LOAD-BEARING, not tidiness. This repo publishes two unrelated
+          # release lines: PHP runtimes (v1.x) and these tools. The fleet's drift checker
+          # asks for `releases/latest` and compares it to the PHP tag every consumer pins,
+          # so a tools release becoming "latest" makes all 13 PHP pin locations report
+          # BEHIND and tells the reader to repin to a tag that contains NO PHP ASSETS.
+          # Observed for real on the first publish of tools-v1: 13 findings, every one of
+          # them destructive if followed. Do not remove this flag.
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Static tools $RELEASE_TAG" \
             --notes-file notes.md \
+            --latest=false \
             zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
           echo "Pin these in start.sh (digests as PUBLISHED, read back from the API):"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
