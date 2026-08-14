@@ -155,9 +155,20 @@ jobs:
               exit 1
             fi
             echo "  no PT_INTERP - self-contained"
-            ldd "$b" 2>&1 | grep -qi 'not a dynamic executable' || {
-              echo "::error::$b reports dynamic dependencies"; ldd "$b"; exit 1; }
-            echo "  ldd confirms no dynamic dependencies"
+            # `|| true` is load-bearing: ldd EXITS NON-ZERO for a static binary, and with
+            # `set -o pipefail` above that made the pipeline fail even though grep matched.
+            # The result was a check that failed for a reason unrelated to what it checks --
+            # it printed "reports dynamic dependencies" directly above ldd's own output
+            # saying "not a dynamic executable". Capture first, then test the TEXT.
+            lddout="$(ldd "$b" 2>&1 || true)"
+            case "$lddout" in
+              *"not a dynamic executable"*)
+                echo "  ldd confirms no dynamic dependencies" ;;
+              *)
+                echo "::error::$b reports dynamic dependencies"
+                printf '%s\n' "$lddout"
+                exit 1 ;;
+            esac
           done
 
           # Functional proof, not just a version string: round-trip a real tree through
