@@ -107,10 +107,17 @@ jobs:
         run: |
           set -euo pipefail
           cd src/zip30
+          # -static AND -no-pie live inside CC, not in CFLAGS/LFLAGS1. Info-ZIP's `generic`
+          # target RE-INVOKES make with its own flag definitions, which discards anything
+          # passed as LFLAGS1 -- so an earlier attempt compiled with -static and then linked
+          # dynamically anyway, producing a PIE with an /lib/ld-musl interpreter. Folding the
+          # flags into CC means every compile AND link invocation carries them, whatever the
+          # recursive make decides to override. Caught by the PT_INTERP assertion below,
+          # which is precisely why that assertion tests the program headers rather than
+          # trusting `file` output or the build succeeding.
           make -f unix/Makefile generic \
-            CC="musl-gcc" \
-            CFLAGS="-O2 -static -DUNIX -DLARGE_FILE_SUPPORT" \
-            LFLAGS1="-static"
+            CC="musl-gcc -static -no-pie" \
+            CFLAGS="-O2 -DUNIX -DLARGE_FILE_SUPPORT"
           ./zip -v | head -2
           cp zip ../../zip
 
