@@ -66,7 +66,7 @@ env:
 
   # Asserted one-by-one after the build. `spc build` can succeed while silently omitting an
   # extension, and that failure is invisible until a plugin repo's CI breaks weeks later.
-  REQUIRED_MODULES: bcmath ctype curl dom fileinfo filter iconv json libxml mbstring openssl pcre Phar posix session SimpleXML sockets sodium tokenizer xml xmlreader xmlwriter zip zlib
+  REQUIRED_MODULES: bcmath ctype curl dom fileinfo filter iconv json libxml mbstring openssl pcntl pcre Phar posix session SimpleXML sockets sodium tokenizer xml xmlreader xmlwriter zip zlib
 
   # Zig instead of musl-cross-make - see the comment on the doctor step for why. The values
   # are PHP ::class strings, so the backslashes are literal and must survive YAML unquoted.
@@ -214,12 +214,7 @@ jobs:
           # linked" - it is the absence of an INTERP program header. No interpreter means no
           # dynamic loader is consulted, which is what lets it run on a rootless container
           # with no matching shared libraries.
-          if readelf -l "$BIN" | grep -q INTERP; then
-            echo "::error::binary has a PT_INTERP segment - it is NOT self-contained"
-            readelf -l "$BIN" | grep -A2 INTERP
-            exit 1
-          fi
-          echo "no PT_INTERP - self-contained"
+          bash scripts/check-static-elf.sh "$BIN"
           if ldd "$BIN" 2>&1 | grep -qv 'not a dynamic executable'; then
             echo "ldd reports (informational):"; ldd "$BIN" 2>&1 || true
           fi
@@ -230,19 +225,25 @@ jobs:
         run: |
           set -euo pipefail
           BIN="$PWD/buildroot/bin/php"
-          "$BIN" -v
-          actual="$("$BIN" -v | head -1 | sed -E 's/^PHP ([0-9]+\.[0-9]+).*/\1/')"
-          if [ "$actual" != "$PHP_VERSION" ]; then
-            printf '::error::built PHP %s but asked for %s\n' "$actual" "$PHP_VERSION"; exit 1
+          version="$("$BIN" -v)"
+          printf '%s\n' "$version"
+          if [[ "$version" != "PHP $PHP_VERSION."* ]]; then
+            echo "::error::expected PHP $PHP_VERSION, got ${version%%$'\n'*}"
+            exit 1
           fi
-          "$BIN" -m
+          modules="$("$BIN" -m)"
+          printf '%s\n' "$modules"
           missing=''
           for m in $REQUIRED_MODULES; do
-            "$BIN" -m | grep -qix "$m" || missing="$missing $m"
+            grep -Fqix -- "$m" <<< "$modules" || missing="$missing $m"
           done
           if [ -n "$missing" ]; then
             echo "::error::static build is MISSING required modules:$missing"
-            echo "A static PHP cannot dlopen - these can never be added at runtime."
+            exit 1
+          fi
+          # mbregex is an mbstring feature, so it has no entry of its own in php -m.
+          if ! "$BIN" -r 'exit(function_exists("mb_ereg") ? 0 : 1);'; then
+            echo "::error::static build is missing mbregex"
             exit 1
           fi
           echo "all required modules present"

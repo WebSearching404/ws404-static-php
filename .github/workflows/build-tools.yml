@@ -150,11 +150,7 @@ jobs:
             # The decisive test is the absence of an INTERP program header: no interpreter
             # means no dynamic loader is consulted, which is what lets it run in a container
             # whose libc it was not built against.
-            if readelf -l "$b" | grep -q INTERP; then
-              echo "::error::$b has a PT_INTERP segment - it is NOT self-contained"
-              exit 1
-            fi
-            echo "  no PT_INTERP - self-contained"
+            bash scripts/check-static-elf.sh "$b"
             # `|| true` is load-bearing: ldd EXITS NON-ZERO for a static binary, and with
             # `set -o pipefail` above that made the pipeline fail even though grep matched.
             # The result was a check that failed for a reason unrelated to what it checks --
