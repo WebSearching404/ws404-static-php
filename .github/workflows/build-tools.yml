@@ -209,11 +209,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: static-tools
+          path: dist
 
       - name: Publish
+        working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.release-tag }}
@@ -237,8 +242,7 @@ jobs:
           # BEHIND and tells the reader to repin to a tag that contains NO PHP ASSETS.
           # Observed for real on the first publish of tools-v1: 13 findings, every one of
           # them destructive if followed. Do not remove this flag.
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
+          bash "$GITHUB_WORKSPACE/scripts/publish-release.sh" "$RELEASE_TAG" \
             --title "Static tools $RELEASE_TAG" \
             --notes-file notes.md \
             --latest=false \
