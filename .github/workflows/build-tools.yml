@@ -70,7 +70,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends musl-tools musl-dev
-          musl-gcc --version | head -1
+          musl-gcc --version | sed -n '1p'
 
       - name: Fetch and verify sources
         run: |
@@ -118,7 +118,7 @@ jobs:
           make -f unix/Makefile generic \
             CC="musl-gcc -static -no-pie" \
             CFLAGS="-O2 -DUNIX -DLARGE_FILE_SUPPORT"
-          ./zip -v | head -2
+          ./zip -v | sed -n '1,2p'
           cp zip ../../zip
 
       - name: Build rsync
@@ -135,7 +135,7 @@ jobs:
             --disable-xxhash --disable-zstd --disable-lz4 --disable-openssl \
             --disable-md2man --without-included-zlib >/dev/null
           make -j"$(nproc)" >/dev/null
-          ./rsync --version | head -2
+          ./rsync --version | sed -n '1,2p'
           cp rsync ../../rsync
 
       # Each assertion below can actually FAIL. A binary that is not genuinely static is
