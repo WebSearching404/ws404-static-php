@@ -125,12 +125,12 @@ Actions → *Build static PHP* → *Run workflow*.
 
 | input | meaning |
 |---|---|
-| `php-versions` | JSON array, default `["8.1","8.4"]` |
+| `php-versions` | JSON array, default `["8.1","8.3","8.4"]` |
 | `release-tag` | **Leave empty to build and verify without publishing.** Set it to publish. |
 | `spc-ref` | `static-php-cli` release to build with; empty = latest |
 
 `8.1` is not optional: it is the default `php-version` of the fleet's reusable `phpstan.yml`,
-and the plugin headers declare `Requires PHP: 8.1`. `8.4` covers the forward-compat lint.
+and the plugin headers declare `Requires PHP: 8.1`. The current consumer also accepts 8.3 and 8.4. Use the default to build all three release archives, or supply a subset to check one minor.
 
 Note that PHP 8.1 is past upstream security support. That is acceptable *here* — this binary
 runs CI analysis on private runners and never serves traffic — but it is a reason to keep the
@@ -145,63 +145,11 @@ Workflow steps then just put it on `PATH`; nothing needs root and nothing new is
 
 ## 7. Staying current, and how you'd know if it wasn't
 
-A pin nobody can see is behind is **worse** than no pin: it looks deliberate while quietly
-freezing, and PHP ships security releases. So the pin is paired with a detector.
+The fleet's `setup-static-php@v1` action selects a release tag and an archive SHA-256 for each supported minor. During setup it verifies the tarball, extracts its `php` member into a job-specific directory, and checks the modules. Composer has its own pin.
 
-`ws404-plugin-workflow`'s **`bin/check-static-php-drift.sh`** holds the logic;
-`static-php-drift.yml` is only the monthly schedule and the issue plumbing around it. It checks
-two independent things — whether each pin is behind the newest release here, and whether that
-release's PHP patch level still matches upstream per branch (`php.net/releases/?json&version=`),
-once per distinct tag. It **reports and never fails**: being behind is a reason to schedule a
-rebuild, not to break every PHPStan and PHPUnit lane in the fleet. The signal is a GitHub issue
-it opens, updates and closes on its own.
+For a PHP update, compare the new release's assets and API digests with the pins in the consumer action. The drift check in `ws404-plugin-workflow/bin/check-static-php-drift.sh` discovers local pins and looks for copies elsewhere. It selects published, non-prerelease entries that contain PHP CLI archives. The separate tools release line carries zip and rsync.
 
-**The pin has more than one home, so the check covers a set of locations**, and each is reported
-*separately*. The inventory lives in one place — the `LOCATIONS` table in
-`bin/check-static-php-drift.sh` — and is deliberately **not** repeated here: it went from 2
-entries to 13 in a single day as the farm migration added self-contained lanes, and a count
-written into prose is stale the moment someone adds a row. Read the table, not this paragraph.
-The duplication itself is deliberate and not removable: shared-mcp's
-`phpunit.yml` is self-contained by design (audit F-07) and the reusable `phpstan.yml` is
-PHPStan-shaped, so there is no setup step to share. The predecessor grepped only its own
-`phpstan.yml`, which made the shared-mcp copy invisible — a BEHIND issue would have been closed
-by repinning `phpstan.yml` alone while a PHPUnit lane stayed on a stale PHP patch, with nothing
-saying so. Locations in *other* repos are listed explicitly (without a token there is no way to
-find them); workflows in the checker's own repo are globbed, so a self-contained lane added
-there is covered the day it lands.
-
-Three things that check gets right on purpose, all learned the hard way:
-
-- **Its own pin comes from the checkout; every other pin comes from the API.** The file is
-  already on disk at the ref the job is running from, so no token can take it away. That is a
-  regression guard, not an optimisation: an earlier cut read every location over a repo-read
-  PAT, and that PAT cannot read even its own repo, so a location that had never needed a token
-  started reporting UNKNOWN. Cross-repo pins have no checkout — and `ws404-shared-mcp` is
-  private, so without a suitable PAT it reports **UNKNOWN** rather than being skipped.
-- **Three-way, never two.** Every location's result is BEHIND / CURRENT / **UNKNOWN**, and
-  UNKNOWN is never folded into "fine". A repo the token cannot read, an unreachable php.net or
-  releases API, a release with no `PHP-BUILT` block, or a pin whose format changed all mean *we
-  do not know* — and printing "current" there would be a false all-clear on the exact mechanism
-  being policed.
-- **`sort -V`, never plain `sort`.** Lexically `8.4.9` sorts *above* `8.4.24`. The
-  `php/php-src` tags API also returns tags in non-version order, which makes this easy to walk
-  into.
-
-**The tag is a label; the sha256 is the control.** So the check verifies both, comparing each
-pinned digest against the digest the release actually publishes for that asset — §2's principle
-applied to the pins themselves, and one API call with no download. The case that motivates it
-needs no mistake by anyone: an asset deleted and re-uploaded under an **unchanged tag** leaves
-the tag correct, so a tag-only check reported CURRENT while every consumer lane began aborting
-on a digest mismatch with nothing explaining why. That is now reported as **MISMATCH**, named
-separately from BEHIND precisely because bumping the tag would not fix it. A pin whose digests
-cannot be read, a release that lists no assets, and an asset with no published digest are all
-UNKNOWN — the same rule as everywhere else here.
-
-None of that is left to inspection. `tests/test-static-php-drift.sh` runs the real script byte
-for byte with only `gh` and `curl` shimmed, and Meta CI gates it. Every negative case asserts
-the *absence* of the all-clear line rather than merely the presence of UNKNOWN, and the tests
-pin the location set itself — drop the shared-mcp entry and they go red. The predecessor lived
-inline in the workflow and could not be tested at all, which is why the logic moved.
+The scheduled check reports stale tags, digest mismatches and unknown results. It also compares the built patch version for each recorded minor with php.net. Use the consumer script and its tests as the reference when investigating a report.
 
 That comparison needs the exact patch level, which the asset name does not carry
 (`php-8.1-...` is the minor). So the release notes include a machine-readable block, derived by
