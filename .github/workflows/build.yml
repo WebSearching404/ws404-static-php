@@ -28,9 +28,9 @@ on:
   workflow_dispatch:
     inputs:
       php-versions:
-        description: 'JSON array of PHP versions to build, e.g. ["8.1","8.4"]'
+        description: 'JSON array of PHP versions to build, e.g. ["8.1","8.3","8.4"]'
         required: false
-        default: '["8.1","8.4"]'
+        default: '["8.1","8.3","8.4"]'
       release-tag:
         description: 'Tag to publish (e.g. v1). Leave EMPTY to build and verify WITHOUT publishing.'
         required: false
