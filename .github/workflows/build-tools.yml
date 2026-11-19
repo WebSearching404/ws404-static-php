@@ -186,8 +186,8 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          tar -czf zip-linux-x86_64.tar.gz zip
-          tar -czf rsync-linux-x86_64.tar.gz rsync
+          bash scripts/package-binary.sh zip zip-linux-x86_64.tar.gz
+          bash scripts/package-binary.sh rsync rsync-linux-x86_64.tar.gz
           sha256sum zip-linux-x86_64.tar.gz rsync-linux-x86_64.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

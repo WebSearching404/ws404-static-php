@@ -301,7 +301,7 @@ jobs:
           set -euo pipefail
           name="php-${PHP_VERSION}-cli-linux-x86_64.tar.gz"
           install -m 0755 buildroot/bin/php php
-          tar -czf "$name" php
+          bash scripts/package-binary.sh php "$name"
           sha="$(sha256sum "$name" | cut -d' ' -f1)"
           full="$(./php -v | head -1)"
           {
