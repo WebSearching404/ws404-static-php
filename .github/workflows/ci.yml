@@ -120,3 +120,6 @@ jobs:
           actionlint --version
           shellcheck --version | awk '/version:/{print "shellcheck " $2}'
           actionlint -color
+
+      - name: Test workflow contracts
+        run: for test in tests/test-*.rb; do ruby "$test"; done

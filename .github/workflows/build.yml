@@ -377,8 +377,7 @@ jobs:
               "$REPO" "$RELEASE_TAG"
           } > NOTES.md
           cat NOTES.md
-          gh release create "$RELEASE_TAG" \
-            --repo "$REPO" \
+          bash "$GITHUB_WORKSPACE/scripts/publish-release.sh" "$RELEASE_TAG" \
             --title "Static PHP $RELEASE_TAG" \
             --notes-file NOTES.md \
             ./*.tar.gz
