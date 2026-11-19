@@ -14,7 +14,7 @@ provenance:
 
 All five archives in the two current release lines matched their published SHA-256 digests and the corresponding consumer pins. Each contained one executable Linux x86-64 ELF with no interpreter segment. The three PHP binaries reported **8.1.34, 8.3.36 and 8.4.27** in offline execution. The existing releases serve the observed consumer contract. The default settings for the next build omit one of those versions.
 
-The public review confirmed **seven findings, two Medium and five Low**. There are zero open candidates or disproved items in the public manifest. The two Medium items affect future releases. Neither establishes a mislabeled or missing archive in the current releases.
+The public review confirmed **eight findings, two Medium and six Low**. There are zero open candidates or disproved items in the public manifest. The two Medium items affect future releases. Neither establishes a mislabeled or missing archive in the current releases.
 
 ## Scope and evidence
 
@@ -78,6 +78,12 @@ Both package steps copy file timestamps and archive ownership into their tarball
 Four action uses in the PHP workflow select a moving v4 tag. The same source commit can therefore invoke different implementations on a later build. The tools and lint workflows already use reviewed full action SHAs. Independent pins on the final assets protect consumers when installing a released archive.
 
 **Change and verification.** Resolve the same action majors to their current upstream commits, use exact SHAs with release comments, and check each value against its owning repository. Preserve action inputs, permissions and dispatch behavior. Future action updates become explicit diffs. Evidence is the workflow and upstream tag resolution. [PHP workflow](https://github.com/WebSearching404/ws404-static-php/blob/83260d0d47cf31fcbe0fbe139f77d9458f7311af/.github/workflows/build.yml)
+
+### SP-08 · Low · Version banners can stop a successful tools build
+
+The tools workflow pipes the compiler, zip and rsync version banners to `head` under `pipefail`. A reader can exit after the requested lines while a healthy program still has output to write. In an offline Linux container, the exact banner pipelines returned producer status 141 and reader status 0 in **30 of 30 trials for each** of the two tools-v1 executables. During a fresh source build, linking zip succeeded but the step stopped at the banner before staging its binary. Earlier hosted releases passed, so this failure depends on pipe timing. The compiler variant was verified with a verbose fixture. A failure from the real compiler's version command was not observed.
+
+**Change and verification.** Read each banner to completion while printing only its first one or two lines. Exercise the actual install, zip-build and rsync-build steps with a verbose successful tool and a tool that returns a nonzero status. Check that the expected status propagates and log size stays bounded. Build flags, packaged program bytes and release selection are unaffected. Evidence is source and local runtime. [Tools workflow, lines 68–73](https://github.com/WebSearching404/ws404-static-php/blob/83260d0d47cf31fcbe0fbe139f77d9458f7311af/.github/workflows/build-tools.yml#L68-L73) · [Zip and rsync steps](https://github.com/WebSearching404/ws404-static-php/blob/83260d0d47cf31fcbe0fbe139f77d9458f7311af/.github/workflows/build-tools.yml#L106-L139)
 
 ## Verification boundaries and review order
 

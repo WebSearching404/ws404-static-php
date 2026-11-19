@@ -12,7 +12,7 @@
     {
       "path": "docs/audits/2026-11-18/FINDINGS.md",
       "kind": "markdown",
-      "sha256": "f77498cff194fcb441adc1ea46576d805f9663cdce70441b1ef0691445637503"
+      "sha256": "e2b7ccfed451f7e222228480a538381394c2f56f8b41694fa6557782576fe37e"
     }
   ],
   "findings": [
@@ -91,17 +91,28 @@
         "vendor_source"
       ],
       "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-08",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "local_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
     }
   ],
   "summary": {
-    "confirmed": 7,
+    "confirmed": 8,
     "candidate": 0,
     "disproved": 0,
     "by_severity": {
       "Critical": 0,
       "High": 0,
       "Medium": 2,
-      "Low": 5,
+      "Low": 6,
       "Informational": 0
     }
   }
