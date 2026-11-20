@@ -50,8 +50,8 @@ env:
   #           the upstream tarball's digest rather than an artifact of one packaging run.
   # Info-ZIP publishes no GitHub releases and its own hosting is unreliable; the Ubuntu
   # archive is a stable, versioned mirror of the identical upstream tarball.
-  RSYNC_VERSION: '3.5.0'
-  RSYNC_SHA256: c7ffd1ef653e99540f661e47cb00b7f9cad1ee6b972399b16f93d672656e0d33
+  RSYNC_VERSION: '3.5.2'
+  RSYNC_SHA256: a10d591825251e070f74c98df3daad195def4ed81b4a2de16169026aea33f6c8
   ZIP_SHA256: f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369
 
 jobs:
@@ -133,7 +133,7 @@ jobs:
             CFLAGS="-O2" \
             LDFLAGS="-static" \
             --disable-xxhash --disable-zstd --disable-lz4 --disable-openssl \
-            --disable-md2man --without-included-zlib >/dev/null
+            --disable-idn --disable-md2man --without-included-zlib >/dev/null
           make -j"$(nproc)" >/dev/null
           ./rsync --version | sed -n '1,2p'
           cp rsync ../../rsync
