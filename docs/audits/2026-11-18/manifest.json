@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "origin": "external-chatgpt-repo-audit",
+    "skill": "audit-repository",
+    "tool": "Codex (OpenAI)",
+    "date": "2026-11-18",
+    "pinned_commit": "83260d0d47cf31fcbe0fbe139f77d9458f7311af",
+    "repo": "WebSearching404/ws404-static-php"
+  },
+  "artifacts": [
+    {
+      "path": "docs/audits/2026-11-18/FINDINGS.md",
+      "kind": "markdown",
+      "sha256": "e2b7ccfed451f7e222228480a538381394c2f56f8b41694fa6557782576fe37e"
+    }
+  ],
+  "findings": [
+    {
+      "id": "SP-01",
+      "status": "confirmed",
+      "severity": "Medium",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "vendor_source"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-02",
+      "status": "confirmed",
+      "severity": "Medium",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "deployed_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-03",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-04",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "local_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-05",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "local_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-06",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "local_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-07",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "vendor_source"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    },
+    {
+      "id": "SP-08",
+      "status": "confirmed",
+      "severity": "Low",
+      "confidence": "high",
+      "evidence_classes": [
+        "source",
+        "local_runtime"
+      ],
+      "report": "docs/audits/2026-11-18/FINDINGS.md"
+    }
+  ],
+  "summary": {
+    "confirmed": 8,
+    "candidate": 0,
+    "disproved": 0,
+    "by_severity": {
+      "Critical": 0,
+      "High": 0,
+      "Medium": 2,
+      "Low": 6,
+      "Informational": 0
+    }
+  }
+}
