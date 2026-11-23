@@ -304,7 +304,17 @@ jobs:
           install -m 0755 buildroot/bin/php php
           bash scripts/package-binary.sh php "$name"
           sha="$(sha256sum "$name" | cut -d' ' -f1)"
-          full="$(./php -v | head -1)"
+          probe="$(mktemp -d)"
+          trap 'rm -rf -- "$probe"' EXIT
+          tar -xzf "$name" -C "$probe" php
+          patch="$("$probe/php" -r 'echo PHP_VERSION;')"
+          if [[ ! "$patch" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "${patch%.*}" != "$PHP_VERSION" ]]; then
+            echo "::error::packaged PHP does not report the requested stable version"
+            exit 1
+          fi
+          printf '%s %s %s\n' "$name" "$sha" "$patch" > "$name.version"
+          full="$("$probe/php" -v)"
+          IFS= read -r full <<< "$full"
           {
             echo "name=$name"
             echo "sha256=$sha"
@@ -315,7 +325,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: php-${{ matrix.php }}
-          path: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.name }}
+            ${{ steps.pkg.outputs.name }}.version
           if-no-files-found: error
           retention-days: 7
 
@@ -333,6 +345,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
+          pattern: php-*
           merge-multiple: true
 
       - name: Publish
@@ -340,8 +353,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.release-tag }}
           REPO: ${{ github.repository }}
+          PHP_VERSIONS: ${{ github.event.inputs.php-versions }}
         run: |
           set -euo pipefail
+          notes="$(mktemp "$RUNNER_TEMP/php-notes.XXXXXXXX")"
           cd dist && ls -l
           {
             echo "Static PHP CLI for linux-x86_64, built by this repo's own CI."
@@ -363,12 +378,7 @@ jobs:
             # (8.1.34). Derived by running the artifact itself rather than trusting a
             # build-time variable, so it describes what actually shipped.
             echo '```'
-            for f in *.tar.gz; do
-              minor="$(echo "$f" | sed -E 's/^php-([0-9]+\.[0-9]+)-.*/\1/')"
-              rm -rf _v && mkdir _v && tar -xzf "$f" -C _v
-              printf 'PHP-BUILT %s %s\n' "$minor" "$(_v/php -r 'echo PHP_VERSION;')"
-              rm -rf _v
-            done
+            python3 "$GITHUB_WORKSPACE/scripts/php-built-lines.py" "$PHP_VERSIONS"
             echo '```'
             echo
             echo "Prefer the digest GitHub publishes over this table - it is served by a"
@@ -376,9 +386,9 @@ jobs:
             echo
             printf '    gh api repos/%s/releases/tags/%s --jq ".assets[]|{name,digest}"\n' \
               "$REPO" "$RELEASE_TAG"
-          } > NOTES.md
-          cat NOTES.md
+          } > "$notes"
+          cat "$notes"
           bash "$GITHUB_WORKSPACE/scripts/publish-release.sh" "$RELEASE_TAG" \
             --title "Static PHP $RELEASE_TAG" \
-            --notes-file NOTES.md \
+            --notes-file "$notes" \
             ./*.tar.gz

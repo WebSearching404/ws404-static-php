@@ -4,7 +4,14 @@ require "tmpdir"
 require "yaml"
 
 root = File.expand_path("..", __dir__)
-program = "#!/bin/sh\necho 'PHP 8.3.0 (cli)'\n"
+program = <<~'SH'
+  #!/bin/sh
+  case "$1" in
+    -v) echo 'PHP 8.3.0 (cli)' ;;
+    -r) printf %s 8.3.0 ;;
+    *) exit 1 ;;
+  esac
+SH
 def execute(*args, dir:)
   output, status = Open3.capture2e(*args, chdir: dir)
   raise "#{args.last}: #{output}" unless status.success?
